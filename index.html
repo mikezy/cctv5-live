@@ -11,24 +11,42 @@
   </style>
 </head>
 <body>
-  <video id="video" autoplay muted></video>
+  <video id="video" autoplay></video>
   <script>
     const src = 'http://112.30.73.119:9901/tsfile/live/1422_1.m3u8?key=txiptv&playlive=0&authid=0';
     const video = document.getElementById('video');
-    if (Hls.isSupported()) {
-      const hls = new Hls();
-      hls.loadSource(src);
-      hls.attachMedia(video);
-      hls.on(Hls.Events.ERROR, function(event, data) {
-        if (data.fatal) {
-          setTimeout(() => {
-            hls.loadSource(src);
-            hls.startLoad();
-          }, 5000);
-        }
+
+    function startStream() {
+      if (Hls.isSupported()) {
+        const hls = new Hls();
+        hls.loadSource(src);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.ERROR, function(event, data) {
+          if (data.fatal) {
+            setTimeout(() => {
+              hls.loadSource(src);
+              hls.startLoad();
+            }, 5000);
+          }
+        });
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = src;
+      }
+    }
+
+    startStream();
+
+    // 尝试带声音播放，如果被阻止则先静音再自动取消静音
+    const playPromise = video.play();
+    if (playPromise !== undefined) {
+      playPromise.catch(() => {
+        // 带声音自动播放被阻止，改为静音播放
+        video.muted = true;
+        video.play().then(() => {
+          // 1秒后尝试取消静音（signage环境通常允许）
+          setTimeout(() => { video.muted = false; }, 2000);
+        });
       });
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = src;
     }
   </script>
 </body>
