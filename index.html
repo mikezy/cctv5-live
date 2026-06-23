@@ -8,47 +8,138 @@
     * { margin: 0; padding: 0; }
     html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
     video { width: 100%; height: 100%; object-fit: fill; }
+    #status { position: fixed; top: 10px; left: 10px; color: #0f0; font: 12px monospace; opacity: 0.7; z-index: 9999; }
   </style>
 </head>
 <body>
   <video id="video" autoplay></video>
+  <div id="status"></div>
   <script>
     const src = 'https://cctv5-proxy.zhuo-gemini.workers.dev/';
     const video = document.getElementById('video');
+    const status = document.getElementById('status');
+    let hls;
+    let stallCount = 0;
+
+    function log(msg) {
+      status.textContent = msg;
+      console.log('[CCTV5]', msg);
+    }
 
     function startStream() {
-      if (Hls.isSupported()) {
-        const hls = new Hls({
-          maxBufferLength: 60,
-          maxMaxBufferLength: 120,
-          maxBufferSize: 100 * 1024 * 1024,
-        });
-        hls.loadSource(src);
-        hls.attachMedia(video);
-        hls.on(Hls.Events.ERROR, function(event, data) {
-          if (data.fatal) {
-            setTimeout(() => {
-              hls.loadSource(src);
-              hls.startLoad();
-            }, 5000);
+      if (!Hls.isSupported()) {
+        if (video.canPlayType('application/vnd.apple.mpegurl')) {
+          video.src = src;
+        }
+        return;
+      }
+
+      if (hls) {
+        hls.destroy();
+      }
+
+      hls = new Hls({
+        // Buffer settings - be greedy
+        maxBufferLength: 90,
+        maxMaxBufferLength: 180,
+        maxBufferSize: 150 * 1024 * 1024,
+        maxBufferHole: 2,
+
+        // Live sync - stay slightly behind live edge for stability
+        liveSyncDurationCount: 3,
+        liveMaxLatencyDurationCount: 10,
+        liveBackBufferLength: 60,
+
+        // Timeouts - be patient with slow segments
+        fragLoadingTimeOut: 30000,
+        fragLoadingMaxRetry: 5,
+        fragLoadingRetryDelay: 2000,
+        manifestLoadingTimeOut: 15000,
+        manifestLoadingMaxRetry: 4,
+        manifestLoadingRetryDelay: 2000,
+        levelLoadingTimeOut: 15000,
+
+        // Low-latency off (we want stability, not low latency)
+        lowLatencyMode: false,
+        backBufferLength: 60,
+
+        // Start from live edge
+        startPosition: -1,
+      });
+
+      hls.loadSource(src);
+      hls.attachMedia(video);
+
+      hls.on(Hls.Events.MANIFEST_PARSED, function() {
+        log('Stream loaded, playing...');
+        tryPlay();
+      });
+
+      // Handle ALL errors (not just fatal)
+      hls.on(Hls.Events.ERROR, function(event, data) {
+        log('Error: ' + data.type + '/' + data.details + (data.fatal ? ' [FATAL]' : ''));
+
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              log('Network error, retrying...');
+              setTimeout(() => hls.startLoad(), 3000);
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              log('Media error, recovering...');
+              hls.recoverMediaError();
+              break;
+            default:
+              log('Fatal error, restarting...');
+              setTimeout(startStream, 5000);
+              break;
           }
-        });
-      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = src;
+        } else if (data.details === 'bufferStalledError') {
+          stallCount++;
+          log('Stall #' + stallCount + ', jumping to live...');
+          jumpToLive();
+        }
+      });
+
+      hls.on(Hls.Events.FRAG_LOADED, function() {
+        stallCount = 0;
+      });
+    }
+
+    function jumpToLive() {
+      if (hls && hls.liveSyncPosition) {
+        video.currentTime = hls.liveSyncPosition;
+        tryPlay();
       }
     }
 
+    function tryPlay() {
+      const playPromise = video.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(() => {
+          video.muted = true;
+          video.play().then(() => {
+            setTimeout(() => { video.muted = false; }, 3000);
+          });
+        });
+      }
+    }
+
+    // Detect video stall via timeupdate
+    let stalledTimer = null;
+    video.addEventListener('timeupdate', () => {
+      if (stalledTimer) clearTimeout(stalledTimer);
+      stalledTimer = setTimeout(() => {
+        log('Playback stalled 8s, jumping to live...');
+        jumpToLive();
+      }, 8000);
+    });
+
+    // Start
     startStream();
 
-    const playPromise = video.play();
-    if (playPromise !== undefined) {
-      playPromise.catch(() => {
-        video.muted = true;
-        video.play().then(() => {
-          setTimeout(() => { video.muted = false; }, 2000);
-        });
-      });
-    }
+    // Hide status overlay after 10 seconds
+    setTimeout(() => { status.style.display = 'none'; }, 10000);
   </script>
 </body>
 </html>
