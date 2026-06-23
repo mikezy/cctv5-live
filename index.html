@@ -13,76 +13,32 @@
 <body>
   <video id="video" autoplay></video>
   <script>
-    const sources = [
-      'https://cctv5-proxy.zhuo-gemini.workers.dev/?fallback=1', // 576p 稳定源 (默认)
-      'https://cctv5-proxy.zhuo-gemini.workers.dev/'             // 1080p 备选
-    ];
-    let currentSource = 0;
-    let stallCount = 0;
+    const src = 'https://cctv5-proxy.zhuo-gemini.workers.dev/';
     const video = document.getElementById('video');
-    let hls;
 
-    function startStream(sourceIndex) {
-      currentSource = sourceIndex;
-      stallCount = 0;
-
-      if (hls) {
-        hls.destroy();
-      }
-
+    function startStream() {
       if (Hls.isSupported()) {
-        hls = new Hls({
-          maxBufferLength: 90,
-          maxMaxBufferLength: 180,
-          maxBufferSize: 150 * 1024 * 1024,
-          liveSyncDurationCount: 4,
-          liveMaxLatencyDurationCount: 8,
-          maxStarvationDelay: 10,
-          maxLoadingDelay: 15,
+        const hls = new Hls({
+          maxBufferLength: 60,
+          maxMaxBufferLength: 120,
+          maxBufferSize: 100 * 1024 * 1024,
         });
-        hls.loadSource(sources[sourceIndex]);
+        hls.loadSource(src);
         hls.attachMedia(video);
-
         hls.on(Hls.Events.ERROR, function(event, data) {
-          if (data.details === 'bufferStalledError') {
-            stallCount++;
-            console.log('Stall #' + stallCount + ' on source ' + sourceIndex);
-            // 3 stalls within session = switch to fallback
-            if (stallCount >= 3 && sourceIndex === 0) {
-              console.log('Switching to fallback source');
-              startStream(1);
-            }
-          }
           if (data.fatal) {
-            if (sourceIndex === 0) {
-              console.log('Fatal error on primary, switching to fallback');
-              startStream(1);
-            } else {
-              // Both failed, retry primary after 10s
-              setTimeout(() => startStream(0), 10000);
-            }
+            setTimeout(() => {
+              hls.loadSource(src);
+              hls.startLoad();
+            }, 5000);
           }
         });
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = sources[sourceIndex];
+        video.src = src;
       }
     }
 
-    startStream(0);
-
-    // Also detect stalling via video events
-    let lastTime = 0;
-    let waitingCount = 0;
-    video.addEventListener('waiting', () => {
-      waitingCount++;
-      if (waitingCount >= 5 && currentSource === 0) {
-        console.log('Too many waits, switching to fallback');
-        startStream(1);
-      }
-    });
-    video.addEventListener('playing', () => {
-      waitingCount = Math.max(0, waitingCount - 1);
-    });
+    startStream();
 
     const playPromise = video.play();
     if (playPromise !== undefined) {
