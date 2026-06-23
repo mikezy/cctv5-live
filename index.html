@@ -2,89 +2,122 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>CCTV5</title>
+  <title>CCTV5 Debug</title>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <style>
     * { margin: 0; padding: 0; }
     html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
     video { width: 100%; height: 100%; object-fit: fill; }
+    #log { position: fixed; bottom: 0; left: 0; right: 0; height: 200px; background: rgba(0,0,0,0.85); color: #0f0; font: 11px monospace; overflow-y: auto; padding: 5px; z-index: 9999; }
   </style>
 </head>
 <body>
   <video id="video" autoplay></video>
+  <div id="log"></div>
   <script>
     const src = 'https://cctv5-proxy.zhuo-gemini.workers.dev/';
     const video = document.getElementById('video');
+    const logEl = document.getElementById('log');
     let hls;
+
+    function log(msg) {
+      const t = ((performance.now()/1000)|0) + 's';
+      const line = `[${t}] ${msg}`;
+      console.log(line);
+      logEl.innerHTML += line + '<br>';
+      logEl.scrollTop = logEl.scrollHeight;
+    }
 
     function startStream() {
       if (!Hls.isSupported()) {
-        if (video.canPlayType('application/vnd.apple.mpegurl')) {
-          video.src = src;
-        }
+        log('hls.js not supported');
         return;
       }
 
-      if (hls) hls.destroy();
-
       hls = new Hls({
-        maxBufferLength: 90,
-        maxMaxBufferLength: 180,
-        maxBufferSize: 150 * 1024 * 1024,
-        maxBufferHole: 2,
+        debug: false,
+        maxBufferLength: 60,
+        maxMaxBufferLength: 120,
+        maxBufferSize: 100 * 1024 * 1024,
         liveSyncDurationCount: 2,
         liveMaxLatencyDurationCount: 5,
-        liveBackBufferLength: 30,
         fragLoadingTimeOut: 20000,
         fragLoadingMaxRetry: 6,
-        fragLoadingRetryDelay: 1000,
         manifestLoadingTimeOut: 10000,
-        manifestLoadingMaxRetry: 6,
-        levelLoadingTimeOut: 10000,
         lowLatencyMode: false,
-        startPosition: -1,
-        nudgeMaxRetry: 10,
       });
 
       hls.loadSource(src);
       hls.attachMedia(video);
 
-      hls.on(Hls.Events.MANIFEST_PARSED, tryPlay);
+      hls.on(Hls.Events.MANIFEST_PARSED, (e, d) => {
+        log('MANIFEST_PARSED levels=' + d.levels.length);
+        tryPlay();
+      });
 
-      hls.on(Hls.Events.ERROR, function(event, data) {
-        if (data.fatal) {
-          if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+      hls.on(Hls.Events.LEVEL_LOADED, (e, d) => {
+        log('LEVEL_LOADED segs=' + d.details.fragments.length + ' live=' + d.details.live + ' dur=' + d.details.totalduration.toFixed(1) + 's');
+      });
+
+      hls.on(Hls.Events.FRAG_LOADING, (e, d) => {
+        log('FRAG_LOADING sn=' + d.frag.sn + ' url=' + d.frag.url.substring(0, 80) + '...');
+      });
+
+      hls.on(Hls.Events.FRAG_LOADED, (e, d) => {
+        const stats = d.frag.stats;
+        const loadTime = stats ? (stats.loading.end - stats.loading.start).toFixed(0) : '?';
+        const size = stats ? (stats.total/1024).toFixed(0) + 'KB' : '?';
+        log('FRAG_LOADED sn=' + d.frag.sn + ' load=' + loadTime + 'ms size=' + size);
+      });
+
+      hls.on(Hls.Events.FRAG_BUFFERED, (e, d) => {
+        log('FRAG_BUFFERED sn=' + d.frag.sn);
+      });
+
+      hls.on(Hls.Events.ERROR, (e, d) => {
+        log('ERROR ' + d.type + '/' + d.details + (d.fatal ? ' FATAL' : '') + (d.reason ? ' reason=' + d.reason : ''));
+        if (d.fatal) {
+          if (d.type === Hls.ErrorTypes.MEDIA_ERROR) {
+            log('Attempting media error recovery...');
             hls.recoverMediaError();
           } else {
+            log('Restarting in 3s...');
             setTimeout(startStream, 3000);
-          }
-        } else if (data.details === 'bufferStalledError') {
-          // Jump to live edge on stall
-          if (hls.liveSyncPosition) {
-            video.currentTime = hls.liveSyncPosition;
           }
         }
       });
 
-      // Auto-recover from stall: if no timeupdate for 5s, jump to live
-      let lastUpdate = Date.now();
-      video.addEventListener('timeupdate', () => { lastUpdate = Date.now(); });
+      hls.on(Hls.Events.BUFFER_APPENDING, (e, d) => {
+        log('BUFFER_APPEND type=' + d.type + ' size=' + (d.data.byteLength/1024).toFixed(0) + 'KB');
+      });
+
+      // Monitor video state
+      video.addEventListener('waiting', () => log('VIDEO: waiting'));
+      video.addEventListener('playing', () => log('VIDEO: playing'));
+      video.addEventListener('stalled', () => log('VIDEO: stalled'));
+      video.addEventListener('pause', () => log('VIDEO: pause'));
+      video.addEventListener('error', () => log('VIDEO: error ' + (video.error ? video.error.code + ':' + video.error.message : '')));
+
+      // Buffer monitor
       setInterval(() => {
-        if (Date.now() - lastUpdate > 5000 && hls && hls.liveSyncPosition) {
-          video.currentTime = hls.liveSyncPosition;
-          tryPlay();
+        if (video.buffered.length > 0) {
+          const buffEnd = video.buffered.end(video.buffered.length - 1);
+          const ahead = (buffEnd - video.currentTime).toFixed(1);
+          log('BUFFER: time=' + video.currentTime.toFixed(1) + ' buffered=' + ahead + 's ahead');
         }
       }, 3000);
     }
 
     function tryPlay() {
       const p = video.play();
-      if (p) p.catch(() => {
+      if (p) p.catch((e) => {
+        log('Play rejected: ' + e.message + ' - trying muted');
         video.muted = true;
-        video.play().then(() => setTimeout(() => { video.muted = false; }, 2000));
+        video.play();
       });
     }
 
+    log('Starting hls.js v' + Hls.version);
     startStream();
   </script>
 </body>
