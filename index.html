@@ -40,10 +40,8 @@
     const playPromise = video.play();
     if (playPromise !== undefined) {
       playPromise.catch(() => {
-        // 带声音自动播放被阻止，改为静音播放
         video.muted = true;
         video.play().then(() => {
-          // 1秒后尝试取消静音（signage环境通常允许）
           setTimeout(() => { video.muted = false; }, 2000);
         });
       });
