@@ -14,8 +14,8 @@
   <video id="video" autoplay></video>
   <script>
     const sources = [
-      'https://cctv5-proxy.zhuo-gemini.workers.dev/',         // 1080p 主源
-      'https://cctv5-proxy.zhuo-gemini.workers.dev/?fallback=1' // 576p 备用源
+      'https://cctv5-proxy.zhuo-gemini.workers.dev/?fallback=1', // 576p 稳定源 (默认)
+      'https://cctv5-proxy.zhuo-gemini.workers.dev/'             // 1080p 备选
     ];
     let currentSource = 0;
     let stallCount = 0;
