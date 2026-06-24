@@ -55,17 +55,15 @@
     }
 
     function tryPlay() {
-      // Try playing with sound first
-      video.muted = false;
-      video.play().catch(() => {
-        // Browser blocked unmuted autoplay - start muted, unmute after first frame
-        video.muted = true;
-        video.play().then(() => {
-          // Auto-unmute after a short delay (Safari allows this after play starts)
-          setTimeout(() => { video.muted = false; }, 500);
-        });
-      });
+      video.muted = true;
+      video.play().catch(() => {});
     }
+
+    // Unmute once video actually starts playing
+    video.addEventListener('playing', function unmute() {
+      video.removeEventListener('playing', unmute);
+      video.muted = false;
+    });
 
     startStream();
   </script>
