@@ -8,39 +8,17 @@
     * { margin: 0; padding: 0; }
     html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
     video { width: 100%; height: 100%; object-fit: fill; }
-    #status {
-      position: fixed; top: 8px; right: 8px; width: 12px; height: 12px;
-      border-radius: 50%; background: #444; z-index: 9999;
-    }
-    #status.live { background: #0f0; }
-    #status.stall { background: #f00; }
-    #status.reconnecting { background: #fa0; }
   </style>
 </head>
 <body>
   <video id="video" autoplay muted playsinline></video>
-  <div id="status"></div>
   <script>
     const src = 'https://cctv5-proxy.zhuo-gemini.workers.dev/';
     const video = document.getElementById('video');
-    const statusDot = document.getElementById('status');
     let hls;
-    let lastTime = -1;
-    let stallCount = 0;
-    let tokenRefreshTimer = null;
-    let isReconnecting = false;
-    let lastPlayingTimestamp = Date.now(); // Track wall-clock of last known good playback
-
-    function setStatus(state) {
-      statusDot.className = state;
-    }
+    let lastPlayTime = Date.now();
 
     function startStream() {
-      isReconnecting = true;
-      stallCount = 0;
-      lastTime = -1;
-      setStatus('reconnecting');
-
       if (!Hls.isSupported()) {
         if (video.canPlayType('application/vnd.apple.mpegurl')) {
           video.src = src;
@@ -48,9 +26,7 @@
         return;
       }
 
-      if (hls) {
-        try { hls.destroy(); } catch(e) {}
-      }
+      if (hls) hls.destroy();
 
       hls = new Hls({
         maxBufferLength: 60,
@@ -70,26 +46,13 @@
 
       hls.on(Hls.Events.ERROR, function(event, data) {
         if (data.fatal) {
-          setStatus('reconnecting');
-          isReconnecting = true;
-          stallCount = 0;
-          lastTime = -1;
           if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-            try { hls.recoverMediaError(); } catch(e) {}
+            hls.recoverMediaError();
           } else {
             setTimeout(startStream, 3000);
           }
         }
       });
-
-      // Token refresh: every 4 minutes
-      clearInterval(tokenRefreshTimer);
-      tokenRefreshTimer = setInterval(() => {
-        if (hls && !isReconnecting) {
-          hls.stopLoad();
-          hls.startLoad(-1);
-        }
-      }, 4 * 60 * 1000);
     }
 
     function tryPlay() {
@@ -97,48 +60,20 @@
       video.play().catch(() => {});
     }
 
-    // Unlock stall detector when video is actually playing
-    video.addEventListener('playing', () => {
+    // Unmute once playing
+    video.addEventListener('playing', function unmute() {
+      video.removeEventListener('playing', unmute);
       video.muted = false;
-      setStatus('live');
-      isReconnecting = false;
-      stallCount = 0;
-      lastTime = video.currentTime;
-      lastPlayingTimestamp = Date.now();
     });
 
-    // Also track timeupdate as proof of life
+    // Track last successful playback
     video.addEventListener('timeupdate', () => {
-      lastPlayingTimestamp = Date.now();
+      lastPlayTime = Date.now();
     });
 
-    // --- Stall detection (every 5s) ---
+    // Nuclear option: if nothing plays for 60s, full page reload
     setInterval(() => {
-      if (isReconnecting) return;
-      if (video.paused || video.readyState < 2) return;
-
-      const now = video.currentTime;
-      if (lastTime >= 0 && now === lastTime) {
-        stallCount++;
-        if (stallCount >= 3) {
-          setStatus('stall');
-          startStream();
-        } else if (stallCount >= 2) {
-          setStatus('stall');
-        }
-      } else {
-        stallCount = 0;
-        setStatus('live');
-      }
-      lastTime = now;
-    }, 5000);
-
-    // --- Nuclear option: full page reload if nothing works for 60s ---
-    // This catches scenarios where JS state is corrupted, hls.js is stuck,
-    // or the stall detector itself failed.
-    setInterval(() => {
-      const deadTime = Date.now() - lastPlayingTimestamp;
-      if (deadTime > 60000) {
+      if (Date.now() - lastPlayTime > 60000) {
         window.location.reload();
       }
     }, 10000);
