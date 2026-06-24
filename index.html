@@ -9,14 +9,12 @@
     html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
     video { width: 100%; height: 100%; object-fit: fill; }
     #status {
-      position: fixed; top: 8px; right: 8px; width: 10px; height: 10px;
+      position: fixed; top: 8px; right: 8px; width: 12px; height: 12px;
       border-radius: 50%; background: #444; z-index: 9999;
-      transition: background 0.3s;
     }
     #status.live { background: #0f0; }
-    #status.stall { background: #f00; animation: pulse 1s infinite; }
-    #status.reconnecting { background: #fa0; animation: pulse 0.5s infinite; }
-    @keyframes pulse { 50% { opacity: 0.3; } }
+    #status.stall { background: #f00; }
+    #status.reconnecting { background: #fa0; }
   </style>
 </head>
 <body>
@@ -25,22 +23,23 @@
   <script>
     const src = 'https://cctv5-proxy.zhuo-gemini.workers.dev/';
     const video = document.getElementById('video');
-    const status = document.getElementById('status');
+    const statusDot = document.getElementById('status');
     let hls;
     let lastTime = -1;
     let stallCount = 0;
     let tokenRefreshTimer = null;
     let isReconnecting = false;
+    let lastPlayingTimestamp = Date.now(); // Track wall-clock of last known good playback
 
     function setStatus(state) {
-      status.className = state;
+      statusDot.className = state;
     }
 
     function startStream() {
-      // Prevent stall detector from re-triggering during reconnection
       isReconnecting = true;
       stallCount = 0;
       lastTime = -1;
+      setStatus('reconnecting');
 
       if (!Hls.isSupported()) {
         if (video.canPlayType('application/vnd.apple.mpegurl')) {
@@ -49,9 +48,9 @@
         return;
       }
 
-      setStatus('reconnecting');
-
-      if (hls) hls.destroy();
+      if (hls) {
+        try { hls.destroy(); } catch(e) {}
+      }
 
       hls = new Hls({
         maxBufferLength: 60,
@@ -69,7 +68,6 @@
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, tryPlay);
 
-      // --- Error handling ---
       hls.on(Hls.Events.ERROR, function(event, data) {
         if (data.fatal) {
           setStatus('reconnecting');
@@ -77,14 +75,14 @@
           stallCount = 0;
           lastTime = -1;
           if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-            hls.recoverMediaError();
+            try { hls.recoverMediaError(); } catch(e) {}
           } else {
             setTimeout(startStream, 3000);
           }
         }
       });
 
-      // --- Token refresh: every 4 minutes, force reload playlist ---
+      // Token refresh: every 4 minutes
       clearInterval(tokenRefreshTimer);
       tokenRefreshTimer = setInterval(() => {
         if (hls && !isReconnecting) {
@@ -99,21 +97,23 @@
       video.play().catch(() => {});
     }
 
-    // --- Unmute and unlock stall detector when video actually plays ---
+    // Unlock stall detector when video is actually playing
     video.addEventListener('playing', () => {
       video.muted = false;
       setStatus('live');
-      // Unlock stall detector — give it a fresh baseline
       isReconnecting = false;
       stallCount = 0;
       lastTime = video.currentTime;
+      lastPlayingTimestamp = Date.now();
     });
 
-    // --- Stall detection ---
-    // Every 5 seconds: if currentTime hasn't moved in 15s, restart.
-    // Completely disabled while reconnecting (isReconnecting = true).
+    // Also track timeupdate as proof of life
+    video.addEventListener('timeupdate', () => {
+      lastPlayingTimestamp = Date.now();
+    });
+
+    // --- Stall detection (every 5s) ---
     setInterval(() => {
-      // Don't check while reconnecting or not yet playing
       if (isReconnecting) return;
       if (video.paused || video.readyState < 2) return;
 
@@ -121,7 +121,6 @@
       if (lastTime >= 0 && now === lastTime) {
         stallCount++;
         if (stallCount >= 3) {
-          // 15 seconds frozen → full restart
           setStatus('stall');
           startStream();
         } else if (stallCount >= 2) {
@@ -134,18 +133,15 @@
       lastTime = now;
     }, 5000);
 
-    // --- Hide status dot after 30s of smooth playback ---
-    let hideTimer = null;
-    const observer = new MutationObserver(() => {
-      if (status.className === 'live') {
-        clearTimeout(hideTimer);
-        hideTimer = setTimeout(() => { status.style.opacity = '0'; }, 30000);
-      } else {
-        clearTimeout(hideTimer);
-        status.style.opacity = '1';
+    // --- Nuclear option: full page reload if nothing works for 60s ---
+    // This catches scenarios where JS state is corrupted, hls.js is stuck,
+    // or the stall detector itself failed.
+    setInterval(() => {
+      const deadTime = Date.now() - lastPlayingTimestamp;
+      if (deadTime > 60000) {
+        window.location.reload();
       }
-    });
-    observer.observe(status, { attributes: true, attributeFilter: ['class'] });
+    }, 10000);
 
     startStream();
   </script>
