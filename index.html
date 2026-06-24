@@ -27,16 +27,21 @@
     const video = document.getElementById('video');
     const status = document.getElementById('status');
     let hls;
-    let lastTime = 0;
+    let lastTime = -1;
     let stallCount = 0;
-    let stallTimer = null;
     let tokenRefreshTimer = null;
+    let isReconnecting = false;
 
     function setStatus(state) {
-      status.className = state; // 'live', 'stall', 'reconnecting', or ''
+      status.className = state;
     }
 
     function startStream() {
+      // Prevent stall detector from re-triggering during reconnection
+      isReconnecting = true;
+      stallCount = 0;
+      lastTime = -1;
+
       if (!Hls.isSupported()) {
         if (video.canPlayType('application/vnd.apple.mpegurl')) {
           video.src = src;
@@ -68,6 +73,9 @@
       hls.on(Hls.Events.ERROR, function(event, data) {
         if (data.fatal) {
           setStatus('reconnecting');
+          isReconnecting = true;
+          stallCount = 0;
+          lastTime = -1;
           if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
             hls.recoverMediaError();
           } else {
@@ -77,10 +85,9 @@
       });
 
       // --- Token refresh: every 4 minutes, force reload playlist ---
-      // The m3u8 contains token-authed segment URLs that may expire
       clearInterval(tokenRefreshTimer);
       tokenRefreshTimer = setInterval(() => {
-        if (hls) {
+        if (hls && !isReconnecting) {
           hls.stopLoad();
           hls.startLoad(-1);
         }
@@ -92,39 +99,42 @@
       video.play().catch(() => {});
     }
 
-    // --- Unmute on every 'playing' event (not just the first) ---
+    // --- Unmute and unlock stall detector when video actually plays ---
     video.addEventListener('playing', () => {
       video.muted = false;
       setStatus('live');
+      // Unlock stall detector — give it a fresh baseline
+      isReconnecting = false;
       stallCount = 0;
+      lastTime = video.currentTime;
     });
 
     // --- Stall detection ---
-    // Check every 5 seconds if video.currentTime is advancing.
-    // If frozen for 15 seconds (3 consecutive checks), force restart.
-    stallTimer = setInterval(() => {
+    // Every 5 seconds: if currentTime hasn't moved in 15s, restart.
+    // Completely disabled while reconnecting (isReconnecting = true).
+    setInterval(() => {
+      // Don't check while reconnecting or not yet playing
+      if (isReconnecting) return;
       if (video.paused || video.readyState < 2) return;
 
       const now = video.currentTime;
-      if (now === lastTime) {
+      if (lastTime >= 0 && now === lastTime) {
         stallCount++;
         if (stallCount >= 3) {
           // 15 seconds frozen → full restart
           setStatus('stall');
-          stallCount = 0;
           startStream();
         } else if (stallCount >= 2) {
           setStatus('stall');
         }
       } else {
-        if (stallCount > 0) stallCount = 0;
+        stallCount = 0;
         setStatus('live');
       }
       lastTime = now;
     }, 5000);
 
     // --- Hide status dot after 30s of smooth playback ---
-    // (optional: keeps the screen clean for signage use)
     let hideTimer = null;
     const observer = new MutationObserver(() => {
       if (status.className === 'live') {
