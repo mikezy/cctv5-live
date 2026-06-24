@@ -11,7 +11,7 @@
   </style>
 </head>
 <body>
-  <video id="video" autoplay></video>
+  <video id="video" autoplay muted playsinline></video>
   <script>
     const src = 'https://cctv5-proxy.zhuo-gemini.workers.dev/';
     const video = document.getElementById('video');
@@ -55,14 +55,17 @@
     }
 
     function tryPlay() {
-      const p = video.play();
-      if (p) p.catch(() => {
-        video.muted = true;
-        video.play().then(() => setTimeout(() => { video.muted = false; }, 3000));
-      });
+      video.muted = true;
+      video.play().then(() => {
+        // Try unmuting after 2s (works if user has interacted before)
+        setTimeout(() => { video.muted = false; }, 2000);
+      }).catch(() => {});
     }
 
     startStream();
+
+    // Click anywhere to unmute
+    document.addEventListener('click', () => { video.muted = false; }, { once: true });
   </script>
 </body>
 </html>
