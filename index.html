@@ -8,27 +8,20 @@
     * { margin: 0; padding: 0; }
     html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
     video { width: 100%; height: 100%; object-fit: fill; }
-    #log { position: fixed; top: 0; left: 0; right: 0; height: 150px; background: rgba(0,0,0,0.85); color: #0f0; font: 11px monospace; overflow-y: auto; padding: 5px; z-index: 9999; }
   </style>
 </head>
 <body>
   <video id="video" autoplay muted playsinline></video>
-  <div id="log"></div>
   <script>
     const src = 'https://cctv5-proxy.zhuo-gemini.workers.dev/';
     const video = document.getElementById('video');
-    const logEl = document.getElementById('log');
     let hls;
-
-    function log(msg) {
-      const t = ((performance.now()/1000)|0) + 's';
-      logEl.innerHTML += `[${t}] ${msg}<br>`;
-      logEl.scrollTop = logEl.scrollHeight;
-    }
 
     function startStream() {
       if (!Hls.isSupported()) {
-        log('hls.js not supported');
+        if (video.canPlayType('application/vnd.apple.mpegurl')) {
+          video.src = src;
+        }
         return;
       }
 
@@ -48,25 +41,33 @@
 
       hls.loadSource(src);
       hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, tryPlay);
 
-      hls.on(Hls.Events.MANIFEST_PARSED, () => { log('MANIFEST_PARSED'); tryPlay(); });
-      hls.on(Hls.Events.LEVEL_LOADED, (e,d) => { log('LEVEL_LOADED segs=' + d.details.fragments.length); });
-      hls.on(Hls.Events.FRAG_LOADING, (e,d) => { log('FRAG_LOADING sn=' + d.frag.sn); });
-      hls.on(Hls.Events.FRAG_LOADED, (e,d) => { log('FRAG_LOADED sn=' + d.frag.sn); });
-      hls.on(Hls.Events.ERROR, (e,d) => { log('ERROR ' + d.details + (d.fatal?' FATAL':'')); });
-
-      video.addEventListener('playing', () => log('VIDEO: playing'));
-      video.addEventListener('waiting', () => log('VIDEO: waiting'));
+      hls.on(Hls.Events.ERROR, function(event, data) {
+        if (data.fatal) {
+          if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+            hls.recoverMediaError();
+          } else {
+            setTimeout(startStream, 3000);
+          }
+        }
+      });
     }
 
     function tryPlay() {
-      video.muted = true;
-      video.play().then(() => log('play() OK')).catch(e => log('play() failed: ' + e.message));
+      // Try playing with sound first
+      video.muted = false;
+      video.play().catch(() => {
+        // Browser blocked unmuted autoplay - start muted, unmute after first frame
+        video.muted = true;
+        video.play().then(() => {
+          // Auto-unmute after a short delay (Safari allows this after play starts)
+          setTimeout(() => { video.muted = false; }, 500);
+        });
+      });
     }
 
-    log('Starting...');
     startStream();
-    document.addEventListener('click', () => { video.muted = false; log('unmuted'); }, { once: true });
   </script>
 </body>
 </html>
