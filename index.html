@@ -17,21 +17,6 @@
     const video = document.getElementById('video');
     let hls;
     let lastPlayTime = Date.now();
-    let audioUnlocked = false;
-
-    // Route audio through Web Audio API as fallback for signage browsers
-    function unlockAudio() {
-      if (audioUnlocked) return;
-      try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const source = ctx.createMediaElementSource(video);
-        source.connect(ctx.destination);
-        if (ctx.state === 'suspended') {
-          ctx.resume();
-        }
-        audioUnlocked = true;
-      } catch (e) {}
-    }
 
     function startStream() {
       if (!Hls.isSupported()) {
@@ -72,33 +57,23 @@
 
     function tryPlay() {
       video.muted = true;
-      video.play().then(() => {
-        unlockAudio();
-      }).catch(() => {});
+      video.play().catch(() => {});
     }
 
-    // Unmute once playing
-    video.addEventListener('playing', function unmute() {
-      video.removeEventListener('playing', unmute);
-      video.muted = false;
-    });
-
-    // Periodically retry unmute if still muted (signage browsers may relax policy)
-    let unmuteAttempts = 0;
-    const unmuteInterval = setInterval(() => {
-      if (!video.muted || unmuteAttempts > 20) {
-        clearInterval(unmuteInterval);
-        return;
+    // Persistent unmute: keep trying every 3s, no limit
+    // If unmute causes pause, re-mute and resume immediately
+    setInterval(() => {
+      if (video.muted && !video.paused) {
+        video.muted = false;
+        // Check if browser killed playback due to unmute
+        setTimeout(() => {
+          if (video.paused) {
+            video.muted = true;
+            video.play().catch(() => {});
+          }
+        }, 300);
       }
-      video.muted = false;
-      setTimeout(() => {
-        if (video.paused) {
-          video.muted = true;
-          video.play().catch(() => {});
-        }
-      }, 500);
-      unmuteAttempts++;
-    }, 5000);
+    }, 3000);
 
     // Track last successful playback
     video.addEventListener('timeupdate', () => {
