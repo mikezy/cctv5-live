@@ -17,6 +17,21 @@
     const video = document.getElementById('video');
     let hls;
     let lastPlayTime = Date.now();
+    let audioUnlocked = false;
+
+    // Route audio through Web Audio API as fallback for signage browsers
+    function unlockAudio() {
+      if (audioUnlocked) return;
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const source = ctx.createMediaElementSource(video);
+        source.connect(ctx.destination);
+        if (ctx.state === 'suspended') {
+          ctx.resume();
+        }
+        audioUnlocked = true;
+      } catch (e) {}
+    }
 
     function startStream() {
       if (!Hls.isSupported()) {
@@ -57,7 +72,9 @@
 
     function tryPlay() {
       video.muted = true;
-      video.play().catch(() => {});
+      video.play().then(() => {
+        unlockAudio();
+      }).catch(() => {});
     }
 
     // Unmute once playing
@@ -66,12 +83,29 @@
       video.muted = false;
     });
 
+    // Periodically retry unmute if still muted (signage browsers may relax policy)
+    let unmuteAttempts = 0;
+    const unmuteInterval = setInterval(() => {
+      if (!video.muted || unmuteAttempts > 20) {
+        clearInterval(unmuteInterval);
+        return;
+      }
+      video.muted = false;
+      setTimeout(() => {
+        if (video.paused) {
+          video.muted = true;
+          video.play().catch(() => {});
+        }
+      }, 500);
+      unmuteAttempts++;
+    }, 5000);
+
     // Track last successful playback
     video.addEventListener('timeupdate', () => {
       lastPlayTime = Date.now();
     });
 
-    // Nuclear option: if nothing plays for 60s, full page reload
+    // If nothing plays for 60s, full page reload
     setInterval(() => {
       if (Date.now() - lastPlayTime > 60000) {
         window.location.reload();
